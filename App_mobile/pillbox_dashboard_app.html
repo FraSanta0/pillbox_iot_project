@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PillBox Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --color-background-primary: #ffffff;
+      --color-background-secondary: #f5f4f0;
+      --color-background-tertiary: #eeede8;
+      --color-text-primary: #1a1a18;
+      --color-text-secondary: #5f5e5a;
+      --color-text-tertiary: #888780;
+      --color-border-tertiary: rgba(0,0,0,0.12);
+      --color-border-secondary: rgba(0,0,0,0.25);
+      --border-radius-md: 8px;
+      --border-radius-lg: 12px;
+      --border-radius-xl: 16px;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "SF Mono", "Fira Code", monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --color-background-primary: #1e1e1c;
+        --color-background-secondary: #282825;
+        --color-background-tertiary: #2f2f2c;
+        --color-text-primary: #f1efe8;
+        --color-text-secondary: #b4b2a9;
+        --color-text-tertiary: #888780;
+        --color-border-tertiary: rgba(255,255,255,0.10);
+        --color-border-secondary: rgba(255,255,255,0.22);
+      }
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-background-tertiary);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+    }
+
+    .app { max-width: 390px; width: 100%; background: var(--color-background-tertiary); padding: 0 0 2rem; }
+
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.25rem 1rem 0.75rem;
+      border-bottom: 0.5px solid var(--color-border-tertiary);
+      margin-bottom: 1.25rem;
+      background: var(--color-background-primary);
+    }
+    .topbar-title { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+    .topbar-sub { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    .dot-ok { background: #639922; }
+    .dot-bad { background: #E24B4A; }
+    .dot-off { background: var(--color-border-secondary); }
+
+    .section { padding: 0 1rem; margin-bottom: 1.5rem; }
+    .section-label {
+      font-size: 11px; font-weight: 500; letter-spacing: 0.06em;
+      color: var(--color-text-tertiary); text-transform: uppercase;
+      margin-bottom: 0.6rem;
+    }
+
+    .card {
+      background: var(--color-background-primary);
+      border: 0.5px solid var(--color-border-tertiary);
+      border-radius: var(--border-radius-lg);
+      padding: 0.9rem 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .user-row { display: flex; align-items: center; gap: 10px; }
+    .avatar {
+      width: 42px; height: 42px; border-radius: 50%;
+      background: #E1F5EE; display: flex; align-items: center;
+      justify-content: center; font-size: 16px; font-weight: 500;
+      color: #085041; flex-shrink: 0;
+    }
+    .user-info { flex: 1; }
+    .user-name { font-size: 15px; font-weight: 500; color: var(--color-text-primary); }
+    .user-status { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+    .pill-badge { font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: var(--border-radius-md); }
+    .badge-taken { background: #EAF3DE; color: #3B6D11; }
+    .badge-missing { background: #FAECE7; color: #993C1D; }
+    .badge-unknown { background: var(--color-background-secondary); color: var(--color-text-secondary); }
+
+    .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 0.5rem; }
+    .day-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .day-label { font-size: 9px; color: var(--color-text-tertiary); font-weight: 500; text-transform: uppercase; }
+    .day-dot { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 500; }
+    .day-taken { background: #EAF3DE; color: #3B6D11; }
+    .day-missed { background: #FCEBEB; color: #A32D2D; }
+    .day-empty { background: var(--color-background-secondary); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); }
+    .day-today { outline: 1.5px solid #1D9E75; outline-offset: 1px; }
+
+    .device-row { display: flex; align-items: center; gap: 8px; }
+    .device-icon {
+      width: 34px; height: 34px; border-radius: var(--border-radius-md);
+      background: var(--color-background-secondary);
+      border: 0.5px solid var(--color-border-tertiary);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
+    .device-info { flex: 1; }
+    .device-name { font-size: 13px; font-weight: 500; color: var(--color-text-primary); }
+    .device-last { font-size: 11px; color: var(--color-text-tertiary); margin-top: 1px; }
+    .conn-on { color: #3B6D11; }
+    .conn-off { color: #993C1D; }
+    .mini-week { display: flex; gap: 3px; margin-top: 5px; }
+    .mini-dot { width: 14px; height: 14px; border-radius: 50%; }
+
+    .location-card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); overflow: hidden; }
+    .location-header { display: flex; align-items: center; justify-content: space-between; padding: 0.9rem 1rem 0.7rem; }
+    .location-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); }
+    .loc-coords { font-size: 11px; color: var(--color-text-tertiary); margin-top: 2px; font-family: var(--font-mono); }
+    .loc-map-placeholder {
+      height: 90px; background: var(--color-background-secondary);
+      display: flex; align-items: center; justify-content: center;
+      border-top: 0.5px solid var(--color-border-tertiary);
+      position: relative; overflow: hidden;
+    }
+    .map-grid {
+      position: absolute; inset: 0;
+      background-image: linear-gradient(var(--color-border-tertiary) 1px, transparent 1px), linear-gradient(90deg, var(--color-border-tertiary) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    .map-pin { width: 16px; height: 16px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #1D9E75; position: relative; z-index: 2; }
+
+    .send-btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      width: 100%; padding: 0.65rem;
+      background: transparent; border: 0.5px solid var(--color-border-secondary);
+      border-radius: var(--border-radius-md);
+      font-size: 13px; font-weight: 500; color: var(--color-text-primary);
+      cursor: pointer; transition: background 0.1s;
+    }
+    .send-btn:hover { background: var(--color-background-secondary); }
+
+    .toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      background: #2C2C2A; color: #F1EFE8;
+      font-size: 12px; padding: 8px 16px;
+      border-radius: var(--border-radius-md);
+      opacity: 0; transition: opacity 0.2s; pointer-events: none;
+      white-space: nowrap; z-index: 100;
+    }
+    .toast.show { opacity: 1; }
+
+    .tabs {
+      display: flex; margin: 0 1rem 1.25rem;
+      border: 0.5px solid var(--color-border-tertiary);
+      border-radius: var(--border-radius-md); overflow: hidden;
+    }
+    .tab {
+      flex: 1; padding: 6px; font-size: 12px; font-weight: 500;
+      text-align: center; cursor: pointer;
+      color: var(--color-text-secondary); background: transparent; border: none;
+      transition: background 0.1s, color 0.1s;
+    }
+    .tab.active { background: var(--color-background-secondary); color: var(--color-text-primary); }
+
+    .pane { display: none; }
+    .pane.active { display: block; }
+
+    .mqtt-status { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--color-text-secondary); }
+
+    /* Toggle switch */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle-label { font-size: 13px; font-weight: 500; color: var(--color-text-primary); }
+    .toggle-sub { font-size: 11px; color: var(--color-text-tertiary); margin-top: 2px; }
+    .toggle-wrap { position: relative; width: 44px; height: 26px; flex-shrink: 0; }
+    .toggle-wrap input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0; cursor: pointer;
+      background: var(--color-border-secondary);
+      border-radius: 26px; transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: ""; position: absolute;
+      width: 20px; height: 20px; left: 3px; bottom: 3px;
+      background: white; border-radius: 50%; transition: transform 0.2s;
+    }
+    .toggle-wrap input:checked + .toggle-slider { background: #1D9E75; }
+    .toggle-wrap input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+    /* Time input */
+    .time-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-top: 14px; padding-top: 14px;
+      border-top: 0.5px solid var(--color-border-tertiary);
+    }
+    .time-label { font-size: 13px; color: var(--color-text-secondary); }
+    input[type="time"] {
+      padding: 6px 10px;
+      background: var(--color-background-secondary);
+      border: 0.5px solid var(--color-border-secondary);
+      border-radius: var(--border-radius-md);
+      font-size: 15px; font-weight: 500;
+      color: var(--color-text-primary);
+      font-family: var(--font-mono);
+      cursor: pointer;
+    }
+    input[type="time"]:focus { outline: none; border-color: #1D9E75; }
+
+    .scheduler-status {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 500; padding: 3px 9px;
+      border-radius: var(--border-radius-md);
+      margin-top: 10px;
+    }
+    .sched-active { background: #EAF3DE; color: #3B6D11; }
+    .sched-paused { background: var(--color-background-secondary); color: var(--color-text-tertiary); }
+
+    .alarm-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #FCEBEB; border: 0.5px solid #F0997B;
+      border-radius: var(--border-radius-md);
+      padding: 8px 12px; margin-bottom: 0.5rem;
+      font-size: 12px; color: #713020;
+    }
+    .alarm-off-btn {
+      font-size: 11px; font-weight: 500; padding: 3px 10px;
+      background: transparent; border: 0.5px solid #D85A30;
+      border-radius: var(--border-radius-md);
+      color: #993C1D; cursor: pointer;
+    }
+    .alarm-off-btn:hover { background: #F5C4B3; }
+
+    input[type="text"], input[type="password"] {
+      width: 100%; padding: 8px 10px;
+      background: var(--color-background-secondary);
+      border: 0.5px solid var(--color-border-secondary);
+      border-radius: var(--border-radius-md);
+      font-size: 13px; color: var(--color-text-primary);
+      font-family: var(--font-sans);
+    }
+    input:focus { outline: none; border-color: #1D9E75; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">PillBox</div>
+      <div class="topbar-sub" id="topbar-date">—</div>
+    </div>
+    <div class="mqtt-status">
+      <span class="status-dot dot-off" id="mqtt-dot"></span>
+      <span id="mqtt-label">non connesso</span>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('overview', this)">Home</button>
+    <button class="tab" onclick="switchTab('devices', this)">Dispositivi</button>
+    <button class="tab" onclick="switchTab('position', this)">Posizione</button>
+    <button class="tab" onclick="switchTab('settings', this)">Impostazioni</button>
+  </div>
+
+  <!-- PANORAMICA -->
+  <div id="pane-overview" class="pane active">
+    <div class="section">
+      <div class="section-label">Stato utente oggi</div>
+      <div class="card">
+        <div class="alarm-bar" id="alarm-bar" style="display:none;">
+          <span>Allarme attivo — pillola non presa</span>
+          <button class="alarm-off-btn" onclick="sendAlarmOff()">Disattiva</button>
+        </div>
+        <div class="user-row">
+          <div class="avatar" id="avatar-initials">?</div>
+          <div class="user-info">
+            <div class="user-name" id="user-name-label">Utente</div>
+            <div class="user-status" id="today-status">In attesa di dati...</div>
+          </div>
+          <span class="pill-badge badge-unknown" id="today-badge">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Settimana corrente</div>
+      <div class="card">
+        <div class="week-grid" id="week-grid">
+          <div class="day-cell"><div class="day-label">LUN</div><div class="day-dot day-empty" id="d0">–</div></div>
+          <div class="day-cell"><div class="day-label">MAR</div><div class="day-dot day-empty" id="d1">–</div></div>
+          <div class="day-cell"><div class="day-label">MER</div><div class="day-dot day-empty" id="d2">–</div></div>
+          <div class="day-cell"><div class="day-label">GIO</div><div class="day-dot day-empty" id="d3">–</div></div>
+          <div class="day-cell"><div class="day-label">VEN</div><div class="day-dot day-empty" id="d4">–</div></div>
+          <div class="day-cell"><div class="day-label">SAB</div><div class="day-dot day-empty" id="d5">–</div></div>
+          <div class="day-cell"><div class="day-label">DOM</div><div class="day-dot day-empty" id="d6">–</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Connessione broker</div>
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--color-text-primary)">Adafruit IO</div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:2px">io.adafruit.com : 443 (WSS)</div>
+        </div>
+        <button class="send-btn" id="connect-btn" onclick="connectMQTT()" style="width:auto;padding:5px 14px;font-size:12px;">Connetti</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DISPOSITIVI -->
+  <div id="pane-devices" class="pane">
+    <div class="section">
+      <div class="section-label">Portapillole registrati</div>
+      <div id="devices-list">
+        <div class="card" style="text-align:center;padding:2rem 1rem;">
+          <div style="font-size:13px;color:var(--color-text-secondary)">Nessun dispositivo ancora connesso.</div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:5px">Attendi il messaggio di connessione dalle schede.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- POSIZIONE + CONFIG -->
+  <div id="pane-position" class="pane">
+    <div class="section">
+      <div class="section-label">Posizione attuale</div>
+      <div class="location-card">
+        <div class="location-header">
+          <div>
+            <div class="location-title" id="loc-title">Non rilevata</div>
+            <div class="loc-coords" id="loc-coords">—</div>
+          </div>
+          <button class="send-btn" onclick="getLocation()" style="width:auto;padding:5px 14px;font-size:12px;" id="loc-btn">Rileva</button>
+        </div>
+        <div class="loc-map-placeholder">
+          <div class="map-grid"></div>
+          <div class="map-pin" id="map-pin" style="display:none"></div>
+          <span style="font-size:11px;color:var(--color-text-tertiary);position:relative;z-index:2;" id="map-placeholder-text">Posizione non rilevata</span>
+        </div>
+      </div>
+      <button class="send-btn" id="send-loc-btn" onclick="sendLocation()" style="margin-top:0.75rem;">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 2l12 6-12 6V9l8-1-8-1V2z" fill="currentColor"/></svg>
+        Invia posizione ad Adafruit
+      </button>
+      <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;text-align:center;" id="loc-sent-info"></div>
+    </div>
+  </div>
+
+  <!-- IMPOSTAZIONI -->
+  <div id="pane-settings" class="pane">
+
+    <div class="section">
+      <div class="section-label">Scheduler giornaliero</div>
+      <div class="card">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Controllo automatico</div>
+            <div class="toggle-sub">Verifica pillola ogni giorno all'orario impostato</div>
+          </div>
+          <label class="toggle-wrap">
+            <input type="checkbox" id="sched-toggle" onchange="onSchedulerToggle()" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="time-row">
+          <span class="time-label">Orario controllo</span>
+          <input type="time" id="sched-time" value="11:10" onchange="onTimeChange()" />
+        </div>
+        <div>
+          <span class="scheduler-status sched-paused" id="sched-badge">In pausa</span>
+        </div>
+      </div>
+      <button class="send-btn" onclick="sendSchedulerConfig()" style="margin-top:0.25rem;">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 2l12 6-12 6V9l8-1-8-1V2z" fill="currentColor"/></svg>
+        Invia configurazione al Twin
+      </button>
+      <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;padding:0 2px;" id="sched-sent-info"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Account Adafruit</div>
+      <div class="card">
+        <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:6px">Username</div>
+        <input type="text" id="conf-user" placeholder="es. mario123" style="margin-bottom:12px;" />
+        <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:6px">Chiave AIO</div>
+        <input type="password" id="conf-key" placeholder="aio_..." style="margin-bottom:12px;" />
+        <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:6px">Nome visualizzato</div>
+        <input type="text" id="conf-name" placeholder="es. Mario" style="margin-bottom:14px;" />
+        <button class="send-btn" onclick="saveConfig()">Salva e applica</button>
+        <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:8px;text-align:center;" id="config-saved-info"></div>
+      </div>
+    </div>
+
+  </div><!-- fine pane-settings -->
+
+</div><!-- fine app -->
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+<script>
+const DAYS_EN = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+const DAYS_IT = ["Lunedì","Martedì","Mercoledì","Giovedì","Venerdì","Sabato","Domenica"];
+const DAY_IDS = ["d0","d1","d2","d3","d4","d5","d6"];
+const LS_KEY = "pillbox_config";
+
+let config = { user: "", key: "", name: "Utente" };
+let schedulerEnabled = false;
+let schedulerTime = "11:10";
+let mqttClient = null;
+let connected = false;
+let weekState = { monday:false, tuesday:false, wednesday:false, thursday:false, friday:false, saturday:false, sunday:false };
+let devices = {};
+let currentLocation = null;
+let todayIndex = (new Date().getDay() + 6) % 7;
+
+/* ── localStorage ── */
+function persistConfig() {
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    user: config.user, key: config.key, name: config.name,
+    schedulerEnabled, schedulerTime
+  }));
+}
+
+function loadPersistedConfig() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    config.user = saved.user || "";
+    config.key  = saved.key  || "";
+    config.name = saved.name || "Utente";
+    schedulerEnabled = !!saved.schedulerEnabled;
+    schedulerTime    = saved.schedulerTime || "11:10";
+
+    document.getElementById("conf-user").value  = config.user;
+    document.getElementById("conf-key").value   = config.key;
+    document.getElementById("conf-name").value  = config.name;
+    document.getElementById("sched-toggle").checked = schedulerEnabled;
+    document.getElementById("sched-time").value = schedulerTime;
+
+    applyUserUI();
+    updateSchedulerBadge();
+  } catch(e) {}
+}
+
+/* ── UI helpers ── */
+function showToast(msg, dur=2400) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), dur);
+}
+
+function switchTab(id, el) {
+  document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.getElementById("pane-" + id).classList.add("active");
+  el.classList.add("active");
+}
+
+function applyUserUI() {
+  document.getElementById("user-name-label").textContent = config.name;
+  document.getElementById("avatar-initials").textContent = config.name.substring(0,2).toUpperCase();
+}
+
+function updateSchedulerBadge() {
+  const badge = document.getElementById("sched-badge");
+  if (schedulerEnabled) {
+    badge.className = "scheduler-status sched-active";
+    badge.textContent = "Attivo — controllo alle " + schedulerTime;
+  } else {
+    badge.className = "scheduler-status sched-paused";
+    badge.textContent = "In pausa";
+  }
+}
+
+/* ── Config save ── */
+function saveConfig() {
+  config.user = document.getElementById("conf-user").value.trim();
+  config.key  = document.getElementById("conf-key").value.trim();
+  config.name = document.getElementById("conf-name").value.trim() || "Utente";
+  if (!config.user || !config.key) { showToast("Inserisci username e chiave AIO"); return; }
+  persistConfig();
+  applyUserUI();
+  const info = document.getElementById("config-saved-info");
+  info.textContent = "Salvato il " + new Date().toLocaleString("it-IT", {day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+  showToast("Configurazione salvata");
+}
+
+/* ── Scheduler controls ── */
+function onSchedulerToggle() {
+  schedulerEnabled = document.getElementById("sched-toggle").checked;
+  updateSchedulerBadge();
+  persistConfig();
+}
+
+function onTimeChange() {
+  schedulerTime = document.getElementById("sched-time").value;
+  updateSchedulerBadge();
+  persistConfig();
+}
+
+function sendSchedulerConfig() {
+  if (!connected) { showToast("Prima connettiti ad Adafruit IO"); return; }
+  const payload = {
+    action: "scheduler_config",
+    sender: "mobile_app",
+    enabled: schedulerEnabled,
+    time: schedulerTime + ":00",
+    timestamp: new Date().toISOString()
+  };
+  const msg = new Paho.Message(JSON.stringify(payload));
+  msg.destinationName = config.user + "/feeds/pill-commands";
+  mqttClient.send(msg);
+  const info = document.getElementById("sched-sent-info");
+  info.textContent = "Inviato alle " + new Date().toLocaleTimeString("it-IT");
+  showToast(schedulerEnabled ? "Scheduler attivato alle " + schedulerTime : "Scheduler disattivato");
+}
+
+function updateWeekUI() {
+  DAYS_EN.forEach((day, i) => {
+    const el = document.getElementById(DAY_IDS[i]);
+    el.className = "day-dot";
+    if (weekState[day] === true) { el.classList.add("day-taken"); el.textContent = "✓"; }
+    else if (weekState[day] === false && i < todayIndex) { el.classList.add("day-missed"); el.textContent = "✗"; }
+    else { el.classList.add("day-empty"); el.textContent = "–"; }
+    if (i === todayIndex) el.classList.add("day-today");
+  });
+  const todayTaken = weekState[DAYS_EN[todayIndex]];
+  const badge = document.getElementById("today-badge");
+  const status = document.getElementById("today-status");
+  if (todayTaken === true) {
+    badge.className = "pill-badge badge-taken"; badge.textContent = "Presa";
+    status.textContent = DAYS_IT[todayIndex] + " — pillola presa";
+    document.getElementById("alarm-bar").style.display = "none";
+  } else {
+    badge.className = "pill-badge badge-missing"; badge.textContent = "Non presa";
+    status.textContent = DAYS_IT[todayIndex] + " — pillola non presa";
+  }
+}
+
+function updateDevicesUI() {
+  const list = document.getElementById("devices-list");
+  const keys = Object.keys(devices);
+  if (keys.length === 0) {
+    list.innerHTML = '<div class="card" style="text-align:center;padding:2rem 1rem;"><div style="font-size:13px;color:var(--color-text-secondary)">Nessun dispositivo ancora connesso.</div></div>';
+    return;
+  }
+  list.innerHTML = keys.map(key => {
+    const d = devices[key];
+    const week = d.week || {};
+    const dots = DAYS_EN.map((day, i) => {
+      const c = week[day] ? "#639922" : (i < todayIndex ? "#E24B4A" : "var(--color-border-tertiary)");
+      return `<div class="mini-dot" style="background:${c}"></div>`;
+    }).join("");
+    const connColor = d.status === "connected" ? "conn-on" : "conn-off";
+    const connText = d.status === "connected" ? "connesso" : "offline";
+    const lastSeen = d.last_seen ? new Date(d.last_seen).toLocaleTimeString("it-IT", {hour:"2-digit",minute:"2-digit"}) : "—";
+    return `<div class="card"><div class="device-row">
+      <div class="device-icon">💊</div>
+      <div class="device-info">
+        <div class="device-name">${d.name || key}</div>
+        <div class="device-last">Visto: ${lastSeen}</div>
+        <div class="mini-week">${dots}</div>
+      </div>
+      <span class="device-conn ${connColor}" style="font-size:11px;font-weight:500;">${connText}</span>
+    </div></div>`;
+  }).join("");
+}
+
+function fetchInitialState() {
+  fetch(`https://io.adafruit.com/api/v2/${config.user}/feeds/digital-twin-status/data/last`, {
+    headers: { "X-AIO-Key": config.key }
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data || !data.value) return;
+    const parsed = JSON.parse(data.value);
+    if (parsed.monday !== undefined) {
+      // Stato globale settimana
+      const { _devices, ...week } = parsed;
+      weekState = week;
+      updateWeekUI();
+      // Dispositivi
+      if (_devices) {
+        devices = _devices;
+        updateDevicesUI();
+      }
+      console.log("[*] Stato caricato da Adafruit REST");
+    }
+  })
+  .catch(e => console.warn("[!] Fetch stato iniziale fallita:", e));
+}
+
+function connectMQTT() {
+  if (!config.user || !config.key) {
+    showToast("Prima configura username e chiave AIO");
+    switchTab("position", document.querySelectorAll(".tab")[2]);
+    return;
+  }
+  if (connected) { showToast("Già connesso"); return; }
+  const btn = document.getElementById("connect-btn");
+  btn.textContent = "Connessione..."; btn.disabled = true;
+  try {
+    const clientId = "pillbox_app_" + Math.random().toString(16).slice(2, 8);
+    mqttClient = new Paho.Client("io.adafruit.com", 443, "/mqtt", clientId);
+    mqttClient.onConnectionLost = (r) => {
+      connected = false;
+      document.getElementById("mqtt-dot").className = "status-dot dot-bad";
+      document.getElementById("mqtt-label").textContent = "disconnesso";
+      btn.textContent = "Connetti"; btn.disabled = false;
+      showToast("Connessione persa: " + r.errorMessage);
+    };
+    mqttClient.onMessageArrived = (msg) => {
+      try { handleMessage(msg.destinationName, JSON.parse(msg.payloadString)); } catch(e) {}
+    };
+    mqttClient.connect({
+      userName: config.user, password: config.key, useSSL: true, timeout: 10,
+      onSuccess: () => {
+        connected = true;
+        document.getElementById("mqtt-dot").className = "status-dot dot-ok";
+        document.getElementById("mqtt-label").textContent = "connesso";
+        btn.textContent = "Connesso"; btn.disabled = false;
+        mqttClient.subscribe(config.user + "/feeds/digital-twin-core");
+        mqttClient.subscribe(config.user + "/feeds/buzzer-commands");
+        showToast("Connesso ad Adafruit IO");
+        fetchInitialState();
+      },
+      onFailure: (e) => {
+        btn.textContent = "Connetti"; btn.disabled = false;
+        document.getElementById("mqtt-dot").className = "status-dot dot-bad";
+        showToast("Errore: " + (e.errorMessage || "connessione fallita"));
+      }
+    });
+  } catch(e) {
+    btn.textContent = "Connetti"; btn.disabled = false;
+    showToast("Errore client MQTT");
+  }
+}
+
+function handleMessage(topic, payload) {
+  if (topic.includes("digital-twin-status")) {
+    if (payload.monday !== undefined) {
+      const { _devices, ...week } = payload;
+      weekState = week;
+      updateWeekUI();
+      if (_devices) {
+        devices = _devices;
+        updateDevicesUI();
+      }
+    }
+  }
+  if (topic.includes("buzzer-commands") && payload.command === "alarm" && payload.val === "ON") {
+    const bar = document.getElementById("alarm-bar");
+    bar.style.display = "flex";
+    showToast("Allarme ricevuto!");
+  }
+}
+
+function sendAlarmOff() {
+  if (!connected) { showToast("Non connesso ad Adafruit"); return; }
+  const payload = { target:"all", command:"alarm", val:"OFF", sender:"mobile_app", timestamp: new Date().toISOString() };
+  const msg = new Paho.Message(JSON.stringify(payload));
+  msg.destinationName = config.user + "/feeds/buzzer-commands";
+  mqttClient.send(msg);
+  document.getElementById("alarm-bar").style.display = "none";
+  showToast("Allarme disattivato");
+}
+
+function getLocation() {
+  const btn = document.getElementById("loc-btn");
+  btn.textContent = "Rilevamento..."; btn.disabled = true;
+  if (!navigator.geolocation) { showToast("Geolocalizzazione non supportata"); btn.textContent = "Rileva"; btn.disabled = false; return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    currentLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: Math.round(pos.coords.accuracy) };
+    document.getElementById("loc-title").textContent = "Posizione rilevata";
+    document.getElementById("loc-coords").textContent = `${currentLocation.lat.toFixed(5)}, ${currentLocation.lng.toFixed(5)}  ±${currentLocation.acc}m`;
+    document.getElementById("map-pin").style.display = "block";
+    document.getElementById("map-placeholder-text").style.display = "none";
+    btn.textContent = "Aggiorna"; btn.disabled = false;
+    showToast("Posizione rilevata");
+  }, err => {
+    showToast("Errore GPS: " + err.message);
+    btn.textContent = "Rileva"; btn.disabled = false;
+  }, { enableHighAccuracy: true, timeout: 8000 });
+}
+
+function sendLocation() {
+  if (!currentLocation) { showToast("Prima rileva la posizione"); return; }
+  if (!connected) { showToast("Prima connettiti ad Adafruit IO"); return; }
+  const payload = {
+    action: "location_update", sender: "mobile_app", device: config.user || "app",
+    lat: currentLocation.lat, lng: currentLocation.lng, accuracy: currentLocation.acc,
+    timestamp: new Date().toISOString()
+  };
+  const msg = new Paho.Message(JSON.stringify(payload));
+  msg.destinationName = config.user + "/feeds/digital-twin-core";
+  mqttClient.send(msg);
+  document.getElementById("loc-sent-info").textContent = "Inviata alle " + new Date().toLocaleTimeString("it-IT");
+  showToast("Posizione inviata");
+}
+
+document.getElementById("topbar-date").textContent = new Date().toLocaleDateString("it-IT", {weekday:"long", day:"numeric", month:"long"});
+loadPersistedConfig();
+updateWeekUI();
+</script>
+</body>
+</html>
