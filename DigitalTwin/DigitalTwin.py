@@ -423,7 +423,7 @@ class PillBoxDigitalTwin:
 if __name__ == "__main__":
     # Inserisci qui le tue credenziali Adafruit
     ADAFRUIT_USER = "321758"
-    ADAFRUIT_KEY = "aio_FPwq82dt3DfLKbJ9Ipohk6RxoKfF"
+    ADAFRUIT_KEY = ""
     twin = PillBoxDigitalTwin(ADAFRUIT_USER, ADAFRUIT_KEY)
     twin.start()
 
