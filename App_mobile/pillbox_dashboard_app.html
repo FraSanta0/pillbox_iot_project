@@ -461,6 +461,11 @@ function switchTab(id, el) {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
   document.getElementById("pane-" + id).classList.add("active");
   el.classList.add("active");
+  refreshState();   // aggiorna i dati da Adafruit ad ogni cambio schermata
+}
+
+function refreshState() {
+  if (config.user && config.key) fetchInitialState();
 }
 
 function applyUserUI() {
@@ -600,7 +605,7 @@ function fetchInitialState() {
 function connectMQTT() {
   if (!config.user || !config.key) {
     showToast("Prima configura username e chiave AIO");
-    switchTab("position", document.querySelectorAll(".tab")[2]);
+    switchTab("settings", document.querySelectorAll(".tab")[3]);
     return;
   }
   if (connected) { showToast("Già connesso"); return; }
@@ -626,6 +631,7 @@ function connectMQTT() {
         document.getElementById("mqtt-dot").className = "status-dot dot-ok";
         document.getElementById("mqtt-label").textContent = "connesso";
         btn.textContent = "Connesso"; btn.disabled = false;
+        mqttClient.subscribe(config.user + "/feeds/digital-twin-status");
         mqttClient.subscribe(config.user + "/feeds/digital-twin-core");
         mqttClient.subscribe(config.user + "/feeds/buzzer-commands");
         showToast("Connesso ad Adafruit IO");
@@ -708,6 +714,7 @@ function sendLocation() {
 document.getElementById("topbar-date").textContent = new Date().toLocaleDateString("it-IT", {weekday:"long", day:"numeric", month:"long"});
 loadPersistedConfig();
 updateWeekUI();
+refreshState();
 </script>
 </body>
 </html>
