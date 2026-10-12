@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PillBox Debug</title>
+<style>
+*{box-sizing:border-box}
+:root{--bg:#f3f3f1;--card:#fff;--tx:#1b1b1a;--mu:#6b6b66;--bd:#d6d6d0;--ac:#0f766e;--in:#1d4ed8;--out:#b45309;--er:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#212120;--tx:#ecece8;--mu:#9a9a94;--bd:#3a3a37;--ac:#2dd4bf;--in:#7aa2ff;--out:#f0a050;--er:#f87171}}
+body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header{padding:12px 16px;background:var(--card);border-bottom:1px solid var(--bd);display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+header h1{font-size:16px;margin:0 12px 0 0;align-self:center}
+label{font-size:12px;color:var(--mu);display:flex;flex-direction:column;gap:2px}
+input,textarea,select,button{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:6px 8px}
+button{cursor:pointer;background:var(--card)}button:hover{border-color:var(--ac)}
+button.pri{background:var(--ac);color:#fff;border-color:var(--ac)}
+:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+main{display:grid;grid-template-columns:300px 1fr;gap:12px;padding:12px;max-width:1200px;margin:auto}
+@media(max-width:800px){main{grid-template-columns:1fr}}
+.box{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:12px}
+h2{font-size:13px;margin:0 0 8px}
+.grp{margin-bottom:12px}.grp h3{font-size:12px;color:var(--mu);margin:0 0 4px;font-weight:600}
+.pre{display:flex;gap:4px;margin-bottom:4px}
+.pre button{flex:1;text-align:left;font-size:13px}
+.pre .x{flex:0;color:var(--er)}
+textarea{width:100%;height:210px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;resize:vertical}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-bottom:8px}
+.row label{flex:1;min-width:150px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--bd);margin-right:6px}
+.dot.on{background:#16a34a}
+#log{height:300px;overflow:auto;font:12px/1.4 ui-monospace,Menlo,monospace}
+.l{padding:3px 0;border-bottom:1px solid var(--bd);cursor:pointer;word-break:break-all}
+.l b.in{color:var(--in)}.l b.out{color:var(--out)}.l b.err{color:var(--er)}.l span{color:var(--mu)}
+.hint{font-size:12px;color:var(--mu);margin:6px 0 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>PillBox Debug</h1>
+  <label>Username AIO<input id="user" size="12"></label>
+  <label>Chiave AIO<input id="key" type="password" size="16"></label>
+  <label>Device (ID scheda)<input id="device" size="10" value="office"></label>
+  <button class="pri" id="conn">Connetti</button>
+  <span><span class="dot" id="dot"></span><span id="st">non connesso</span></span>
+</header>
+
+<main>
+  <aside class="box">
+    <h2>Messaggi predefiniti</h2>
+    <div id="presets"></div>
+  </aside>
+
+  <section>
+    <div class="box" style="margin-bottom:12px">
+      <h2>Editor messaggio</h2>
+      <div class="row">
+        <label>Feed<input id="feed" list="feeds"><datalist id="feeds"></datalist></label>
+        <label style="flex:0;min-width:90px">Retain<select id="retain"><option value="0">no</option><option value="1">sì</option></select></label>
+        <label>Nome (per salvare)<input id="pname" placeholder="es. Mio messaggio"></label>
+      </div>
+      <textarea id="body" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="pri" id="send">Invia</button>
+        <button id="fmt">Formatta JSON</button>
+        <button id="save">Salva come preset</button>
+        <button id="sub">Iscriviti al feed</button>
+      </div>
+      <p class="hint">Segnaposto: <code>{{now}}</code> timestamp ISO, <code>{{device}}</code> campo Device, <code>{{user}}</code> username. Clicca una riga del log per caricarla nell'editor. Un feed nuovo va creato su Adafruit IO prima di poterlo usare.</p>
+    </div>
+
+    <div class="box">
+      <div class="row" style="margin-bottom:4px"><h2 style="flex:1;margin:0">Log</h2>
+        <label style="flex:0;min-width:0"><span>&nbsp;</span><button id="clear">Pulisci</button></label></div>
+      <div id="log"></div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const CORE="digital-twin-core",CMD="pill-commands",BUZ="buzzer-commands",STA="digital-twin-status";
+const J=o=>JSON.stringify(o,null,2);
+const T="{{now}}",D="{{device}}";
+
+/* Preset: [ruolo, nome, feed, oggetto, retain] */
+const BUILTIN=[
+["Arduino (via Node-RED)","Connection",CORE,{action:"connection",device:D,name:"Office",lat:"44.6677",lng:"10.4749",timestamp:T}],
+["Arduino (via Node-RED)","Pillola presa (REQ taken)",CORE,{action:"REQ",val:"taken",device:D,timestamp:T}],
+["Arduino (via Node-RED)","Pillola non presa (REQ not taken)",CORE,{action:"REQ",val:"not taken",device:D,timestamp:T}],
+["Arduino (via Node-RED)","REQ_STATUS (7 vani)",CORE,{action:"REQ_STATUS",status:"0000000",device:D,timestamp:T}],
+["Arduino (via Node-RED)","REF (refill)",CORE,{action:"REF",status:"0000000",device:D,timestamp:T}],
+["Digital Twin","Check giornaliero (REQ)",CMD,{target:"all",command:"REQ",val:0,sender:"digital_twin_engine",timestamp:T}],
+["Digital Twin","Richiesta stato (REQ_STATUS)",CMD,{target:"all",command:"REQ_STATUS",val:0,sender:"digital_twin_engine",timestamp:T}],
+["Digital Twin","Refill (REF)",CMD,{target:"all",command:"REF",val:0,sender:"digital_twin_engine",timestamp:T}],
+["Digital Twin","Allarme ON",BUZ,{target:"all",command:"ALM_ON",val:"ON",sender:"digital_twin_engine",timestamp:T}],
+["Digital Twin","Allarme OFF",BUZ,{target:"all",command:"ALM_OFF",val:"OFF",sender:"digital_twin_engine",timestamp:T}],
+["Digital Twin","Pubblica stato",STA,{monday:false,tuesday:false,wednesday:false,thursday:false,friday:false,saturday:false,sunday:false,_devices:{[D]:{name:"Office",status:"connected",last_seen:T,lat:"44.6677",lng:"10.4749",week:{monday:false,tuesday:false,wednesday:false,thursday:false,friday:false,saturday:false,sunday:false}}}},1],
+["App mobile","Config scheduler",CMD,{action:"scheduler_config",sender:"mobile_app",enabled:true,time:"11:10:00",timestamp:T}],
+["App mobile","Aggiorna posizione",CORE,{action:"location_update",sender:"mobile_app",device:"{{user}}",lat:44.6677,lng:10.4749,accuracy:10,timestamp:T}],
+["App mobile","Disattiva allarme",BUZ,{target:"all",command:"alarm",val:"OFF",sender:"mobile_app",timestamp:T}]
+];
+const LS="pillbox_debug";
+let st={user:"",key:"",device:"office",custom:[],feeds:[CORE,CMD,BUZ,STA]};
+try{Object.assign(st,JSON.parse(localStorage.getItem(LS)||"{}"))}catch(e){}
+const persist=()=>{try{localStorage.setItem(LS,JSON.stringify(st))}catch(e){}};
+$("user").value=st.user;$("key").value=st.key;$("device").value=st.device;
+
+function renderPresets(){
+  const groups={};
+  BUILTIN.forEach(p=>(groups[p[0]]??=[]).push({n:p[1],f:p[2],o:p[3],r:p[4]?1:0}));
+  if(st.custom.length)groups["Personalizzati"]=st.custom.map((c,i)=>({...c,i,c:1}));
+  $("presets").innerHTML="";
+  for(const g in groups){
+    const d=document.createElement("div");d.className="grp";
+    d.innerHTML=`<h3>${g}</h3>`;
+    groups[g].forEach(p=>{
+      const r=document.createElement("div");r.className="pre";
+      const b=document.createElement("button");b.textContent=p.n;
+      b.onclick=()=>{$("feed").value=p.f;$("retain").value=p.r?1:0;$("body").value=typeof p.o==="string"?p.o:J(p.o);$("pname").value=p.c?p.n:""};
+      r.appendChild(b);
+      if(p.c){const x=document.createElement("button");x.className="x";x.textContent="✕";x.title="Elimina";
+        x.onclick=()=>{st.custom.splice(p.i,1);persist();renderPresets()};r.appendChild(x)}
+      d.appendChild(r)});
+    $("presets").appendChild(d)}
+  $("feeds").innerHTML=st.feeds.map(f=>`<option value="${f}">`).join("");
+}
+renderPresets();
+
+function log(kind,topic,text){
+  const e=document.createElement("div");e.className="l";
+  const lab={in:"← IN",out:"→ OUT",err:"! ERR"}[kind];
+  e.innerHTML=`<span>${new Date().toLocaleTimeString("it-IT")}</span> <b class="${kind}">${lab}</b> <span>${topic||""}</span><br>`;
+  e.appendChild(document.createTextNode(text));
+  e.onclick=()=>{if(kind==="err")return;const f=(topic||"").split("/feeds/")[1];if(f)$("feed").value=f;
+    try{$("body").value=J(JSON.parse(text))}catch(x){$("body").value=text}};
+  const L=$("log");L.prepend(e);
+  while(L.children.length>300)L.lastChild.remove();
+}
+$("clear").onclick=()=>$("log").innerHTML="";
+
+/* MQTT */
+let cli=null,on=false;
+const setSt=(ok,t)=>{on=ok;$("dot").classList.toggle("on",ok);$("st").textContent=t;$("conn").textContent=ok?"Disconnetti":"Connetti"};
+const sub=f=>{if(on)cli.subscribe(st.user+"/feeds/"+f)};
+$("conn").onclick=()=>{
+  if(on){cli.disconnect();return}
+  st.user=$("user").value.trim();st.key=$("key").value.trim();st.device=$("device").value.trim()||"office";persist();
+  if(!st.user||!st.key){log("err","","Inserisci username e chiave AIO");return}
+  cli=new Paho.Client("io.adafruit.com",443,"/mqtt","pbdebug_"+Math.random().toString(16).slice(2,8));
+  cli.onConnectionLost=r=>{setSt(false,"non connesso");if(r.errorCode)log("err","","Connessione persa: "+r.errorMessage)};
+  cli.onMessageArrived=m=>log("in",m.destinationName,m.payloadString);
+  $("st").textContent="connessione...";
+  cli.connect({userName:st.user,password:st.key,useSSL:true,timeout:10,
+    onSuccess:()=>{setSt(true,"connesso come "+st.user);st.feeds.forEach(sub)},
+    onFailure:e=>{setSt(false,"non connesso");log("err","","Connessione fallita: "+(e.errorMessage||""))}});
+};
+$("sub").onclick=()=>{
+  const f=$("feed").value.trim();if(!f)return;
+  if(!st.feeds.includes(f)){st.feeds.push(f);persist();renderPresets()}
+  if(!on){log("err","","Non connesso");return}
+  sub(f);log("out",st.user+"/feeds/"+f,"[subscribe]");
+};
+
+/* Invio */
+function fill(s){
+  const dev=$("device").value.trim()||"office";
+  return s.replaceAll("{{now}}",new Date().toISOString()).replaceAll("{{device}}",dev).replaceAll("{{user}}",st.user||$("user").value.trim());
+}
+$("fmt").onclick=()=>{try{$("body").value=J(JSON.parse($("body").value))}catch(e){log("err","","JSON non valido: "+e.message)}};
+$("send").onclick=()=>{
+  const f=$("feed").value.trim();
+  if(!on){log("err","","Non connesso");return}
+  if(!f){log("err","","Indica un feed");return}
+  const txt=fill($("body").value);
+  try{JSON.parse(txt)}catch(e){log("err","","JSON non valido: "+e.message);return}
+  const m=new Paho.Message(JSON.stringify(JSON.parse(txt)));
+  m.destinationName=st.user+"/feeds/"+f;m.retained=$("retain").value==="1";
+  cli.send(m);log("out",m.destinationName,m.payloadString);
+  if(!st.feeds.includes(f)){st.feeds.push(f);persist();renderPresets();sub(f)}
+};
+$("save").onclick=()=>{
+  const n=$("pname").value.trim(),f=$("feed").value.trim();
+  if(!n||!f){log("err","","Servono nome e feed per salvare");return}
+  try{JSON.parse(fill($("body").value))}catch(e){log("err","","JSON non valido: "+e.message);return}
+  const i=st.custom.findIndex(c=>c.n===n),item={n,f,o:$("body").value,r:+$("retain").value};
+  i>=0?st.custom[i]=item:st.custom.push(item);persist();renderPresets();
+};
+</script>
+</body>
+</html>
