@@ -1,115 +1,182 @@
-import paho.mqtt.client as mqtt
 import json
+import logging
+import os
+import sys
+import sqlite3
 import time
 import threading
 import schedule
+
+import paho.mqtt.client as mqtt
+
 from datetime import datetime
-import sys
-import os
-import sqlite3
+from logging.handlers import RotatingFileHandler
+
+
+# ============================================================
+# CONFIGURAZIONE LOG
+# ============================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def setup_logging():
+    """Configura log su file, errori e terminale."""
+
+    formatter = logging.Formatter(
+        fmt=(
+            "%(asctime)s.%(msecs)03d | "
+            "%(levelname)-8s | "
+            "%(name)-14s | "
+            "%(message)s"
+        ),
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # Evita di aggiungere più volte gli handler.
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        handler.close()
+
+    # File generale: INFO e livelli superiori.
+    general_handler = RotatingFileHandler(
+        os.path.join(BASE_DIR, "twin.log"),
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8"
+    )
+    general_handler.setLevel(logging.INFO)
+    general_handler.setFormatter(formatter)
+
+    # File errori: ERROR e CRITICAL.
+    error_handler = RotatingFileHandler(
+        os.path.join(BASE_DIR, "twin.err"),
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8"
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+
+    # Output sul terminale.
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    root.addHandler(general_handler)
+    root.addHandler(error_handler)
+    root.addHandler(console_handler)
+
+
+setup_logging()
+
+log = logging.getLogger("DIGITAL_TWIN")
+db_log = logging.getLogger("DATABASE")
+mqtt_log = logging.getLogger("MQTT")
+sched_log = logging.getLogger("SCHEDULER")
+
+
+# ============================================================
+# DATABASE
+# ============================================================
 
 class DatabaseManager:
+
+    DAYS = (
+        "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday"
+    )
+
     def __init__(self, db_name="Digital_twin_db.db"):
-        base_dir = os.path.dirname(os.path.abspath(__file__))
         self.db_name = db_name
-        self.db_path = os.path.join(base_dir, db_name)
+        self.db_path = os.path.join(BASE_DIR, db_name)
         self.static_id_patient = 1
-        
-        #self.delete_tables() 
+
         self.init_db()
 
-        
-
     def get_connection(self):
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
     def init_db(self):
-        """Crea le tabelle se non esistono già."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 1. Tabella Paziente
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS patients (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    lat FLOAT,
-                    lng FLOAT,
-                    default_intake_time TEXT DEFAULT '10:00'
-                )
-            ''')
-            
-            # 2. Tabella Dispositivi
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS devices (
-                    device_name TEXT PRIMARY KEY,
-                    patient_id INTEGER,
-                    lat FLOAT,
-                    lng FLOAT,
-                    status TEXT DEFAULT 'disconnected',
-                    last_seen TEXT,
-                    FOREIGN KEY (patient_id) REFERENCES patients (id)
-                )
-            ''')
-            
-            # 3. Tabella Week_status
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS week_status (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_name TEXT,
-                    patient_id INTEGER,
-                    timestamp TEXT,
-                    monday BOOLEAN,
-                    tuesday BOOLEAN,
-                    wednesday BOOLEAN,
-                    thursday BOOLEAN,
-                    friday BOOLEAN,
-                    saturday BOOLEAN,
-                    sunday BOOLEAN,
-                    FOREIGN KEY (device_name) REFERENCES devices (device_name),
-                    FOREIGN KEY (patient_id) REFERENCES patients (id),
-                    CHECK (
-                        (device_name IS NOT NULL AND patient_id IS NULL) OR
-                        (device_name IS NULL AND patient_id IS NOT NULL)
-                    )
-                )
-            ''')
+        """Crea le tabelle se non esistono."""
 
-            # 4. Tabella Schedules
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS schedules (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    patient_id INTEGER,
-                    enabled BOOLEAN,
-                    intake_time TEXT DEFAULT '10:00',
-                    FOREIGN KEY (patient_id) REFERENCES patients (id)
-                )
-            ''')
+        try:
+            with self.get_connection() as conn:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS patients (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        lat FLOAT,
+                        lng FLOAT,
+                        default_intake_time TEXT DEFAULT '10:00'
+                    );
 
-            #5. Inserimento del paziente statico se non esiste
-            cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS devices (
+                        device_name TEXT PRIMARY KEY,
+                        patient_id INTEGER,
+                        lat FLOAT,
+                        lng FLOAT,
+                        status TEXT DEFAULT 'disconnected',
+                        last_seen TEXT,
+                        FOREIGN KEY (patient_id) REFERENCES patients(id)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS week_status (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        device_name TEXT,
+                        patient_id INTEGER,
+                        timestamp TEXT,
+                        monday BOOLEAN,
+                        tuesday BOOLEAN,
+                        wednesday BOOLEAN,
+                        thursday BOOLEAN,
+                        friday BOOLEAN,
+                        saturday BOOLEAN,
+                        sunday BOOLEAN,
+                        FOREIGN KEY (device_name)
+                            REFERENCES devices(device_name),
+                        FOREIGN KEY (patient_id)
+                            REFERENCES patients(id),
+                        CHECK (
+                            (device_name IS NOT NULL AND patient_id IS NULL)
+                            OR
+                            (device_name IS NULL AND patient_id IS NOT NULL)
+                        )
+                    );
+
+                    CREATE TABLE IF NOT EXISTS schedules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        patient_id INTEGER,
+                        enabled BOOLEAN,
+                        intake_time TEXT DEFAULT '10:00',
+                        FOREIGN KEY (patient_id) REFERENCES patients(id)
+                    );
+                """)
+
+                conn.executescript('''
                 INSERT OR IGNORE INTO patients (id, name, lat, lng, default_intake_time)
                 VALUES (?, ?, NULL, NULL, NULL)
             ''', (self.static_id_patient, "default_patient"))
 
-            conn.commit()
-            print("[DB] Tabelle inizializzate")
+            db_log.info("Database inizializzato: %s", self.db_path)
 
-    def register_or_update_device(self, name=None, lat=None, lng=None, status="connected", last_seen=None):
-        """Salva o aggiorna lo stato del dispositivo sul DB."""
+        except sqlite3.Error:
+            db_log.exception("Errore durante l'inizializzazione del database")
+            raise
+
+    def register_or_update_device(
+        self, name=None, lat=None, lng=None,
+        status="connected", last_seen=None
+    ):
+        """Registra o aggiorna un dispositivo."""
+
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO devices (device_name, patient_id, status, last_seen, lat, lng)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(device_name) DO UPDATE SET
-                    status = COALESCE(excluded.status, devices.status),
-                    last_seen = COALESCE(excluded.last_seen, devices.last_seen), 
-                    lat = COALESCE(excluded.lat, devices.lat),
-                    lng = COALESCE(excluded.lng, devices.lng)
-            ''', (name, self.static_id_patient, status, last_seen, lat, lng))
-
-            cursor.execute('''
+            conn.cursor.execute('''
                 UPDATE devices
                 SET status = ?,
                     last_seen = ?, lat = ?, lng = ?
@@ -118,237 +185,210 @@ class DatabaseManager:
                 status, last_seen, lat, lng, name
                 ))
 
-            if cursor.rowcount == 0:  # caso in cui la riga non esiste
-                cursor.execute('''
+            if conn.cursor.rowcount == 0:  # caso in cui la riga non esiste
+                conn.cursor.execute('''
                     INSERT INTO devices (device_name, patient_id, status, last_seen, lat, lng)
                     VALUES (?, NULL, ?, ?, ?, ?)
                 ''', (name, self.static_id_patient, status, last_seen, lat, lng))
 
-            conn.commit()
-        """Con coalesce vado a recuperare il primo non nullo tra quelli passati, dando la priorità a quello nuovo"""
-        """Excluded è una tabella temporanea creata se si genera un confinto al momento dell'insert"""
+        db_log.info(
+            "Dispositivo aggiornato: %s, status=%s",
+            name, status
+        )
 
     def insert_or_update_status_device(self, device_name, timestamp, week):
-        """Registra o aggiorna lo status del device nel database."""
+        """Salva lo stato settimanale di un dispositivo."""
+
+        values = tuple(int(bool(week.get(day, False))) for day in self.DAYS)
+
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            print("qua\n")
-            
-            cursor.execute('''
-            UPDATE week_status
-            SET timestamp = ?,
-                monday = ?, tuesday = ?, wednesday = ?,
-                thursday = ?, friday = ?, saturday = ?, sunday = ?
-            WHERE device_name = ?
-        ''', (
-            timestamp,
-            week["monday"], week["tuesday"], week["wednesday"],
-            week["thursday"], week["friday"], week["saturday"], week["sunday"],
-            device_name
-            ))
-
-            print(f"[DB] Ho scritto {cursor.rowcount} righe")
-            if cursor.rowcount == 0:  # caso in cui la riga non esiste
-                cursor.execute('''
-                    INSERT INTO week_status (
-                        device_name, patient_id, timestamp, 
-                        monday, tuesday, wednesday, thursday, friday, saturday, sunday
-                    )
-                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    device_name, timestamp,
-                    week["monday"], week["tuesday"], week["wednesday"],
-                    week["thursday"], week["friday"], week["saturday"], week["sunday"]
-                ))
-
-            conn.commit()
-        print(f"[DB] Salvato status per {device_name}: {week}")
-
-    def insert_or_update_status_person(self, timestamp, week):
-        """registra o aggiorna lo status settimanale della persona nel database."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute('''
+            cursor = conn.execute("""
                 UPDATE week_status
                 SET timestamp = ?,
                     monday = ?, tuesday = ?, wednesday = ?,
                     thursday = ?, friday = ?, saturday = ?, sunday = ?
-                WHERE patient_id IS NOT NULL
-            ''', (
-            timestamp,
-            week["monday"], week["tuesday"], week["wednesday"],
-            week["thursday"], week["friday"], week["saturday"], week["sunday"]
-            ))
-            if cursor.rowcount == 0:  # caso in cui la riga non esiste
-                cursor.execute('''
+                WHERE device_name = ? AND patient_id IS NULL
+            """, (timestamp, *values, device_name))
+
+            if cursor.rowcount == 0:
+                conn.execute("""
                     INSERT INTO week_status (
-                        device_name, patient_id, timestamp, 
-                        monday, tuesday, wednesday, thursday, friday, saturday, sunday
+                        device_name, patient_id, timestamp,
+                        monday, tuesday, wednesday, thursday,
+                        friday, saturday, sunday
+                    )
+                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (device_name, timestamp, *values))
+
+        db_log.info("Stato settimanale salvato per device %s", device_name)
+
+    def insert_or_update_status_person(self, timestamp, week):
+        """Salva lo stato settimanale della persona."""
+
+        values = tuple(int(bool(week.get(day, False))) for day in self.DAYS)
+
+        with self.get_connection() as conn:
+            cursor = conn.execute("""
+                UPDATE week_status
+                SET timestamp = ?,
+                    monday = ?, tuesday = ?, wednesday = ?,
+                    thursday = ?, friday = ?, saturday = ?, sunday = ?
+                WHERE patient_id = ? AND device_name IS NULL
+            """, (timestamp, *values, self.static_id_patient))
+
+            if cursor.rowcount == 0:
+                conn.execute("""
+                    INSERT INTO week_status (
+                        device_name, patient_id, timestamp,
+                        monday, tuesday, wednesday, thursday,
+                        friday, saturday, sunday
                     )
                     VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    timestamp, self.static_id_patient,
-                    week["monday"], week["tuesday"], week["wednesday"],
-                    week["thursday"], week["friday"], week["saturday"], week["sunday"]
-                ))
-            conn.commit()
-        print(f"[DB] Salvato status persona: {week}")
+                """, (self.static_id_patient, timestamp, *values))
+
+        db_log.info("Stato settimanale della persona salvato")
 
     def load_devices_state(self):
-        """Ripristina lo stato `self.devices`"""
-        devices_dict = {}
+        """Carica dispositivi e ultimo stato settimanale disponibile."""
+
+        devices = {}
+
         with self.get_connection() as conn:
-            conn.row_factory = sqlite3.Row  # Permtee di accedere alle colonne per nome come fosse un dizionario
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM devices')
-            rows = cursor.fetchall()
-            
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM devices").fetchall()
+
             for row in rows:
-                cursor.execute(
-                    """SELECT * FROM week_status
-                       WHERE device_name = ? AND patient_id IS NULL
-                       ORDER BY timestamp DESC, id DESC LIMIT 1""",
-                    (row['device_name'],),
-                )
-                week_row = cursor.fetchone()
-                days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-                week = (
-                    {day: bool(week_row[day]) for day in days}
-                    if week_row
-                    else {day: False for day in days}
-                )
-                devices_dict[row['device_name']] = {
-                    "name": row['device_name'],
-                    "status": row['status'],
-                    "last seen": row['last_seen'],
-                    "lat": row['lat'],
-                    "lng": row['lng'],
+                week_row = conn.execute("""
+                    SELECT * FROM week_status
+                    WHERE device_name = ? AND patient_id IS NULL
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                """, (row["device_name"],)).fetchone()
+
+                week = {
+                    day: bool(week_row[day]) if week_row else False
+                    for day in self.DAYS
+                }
+
+                devices[row["device_name"]] = {
+                    "name": row["device_name"],
+                    "status": row["status"],
+                    "last_seen": row["last_seen"],
+                    "lat": row["lat"],
+                    "lng": row["lng"],
                     "week": week
                 }
-        return devices_dict
+
+        db_log.info("Caricati %d dispositivi", len(devices))
+        return devices
 
     def load_global_state(self):
-        """Ripristina lo stato globale"""
-        week = {day: False for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")}
+        """Carica lo stato settimanale della persona."""
+
         with self.get_connection() as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """SELECT * FROM week_status
-                           WHERE patient_id IS NOT NULL
-                           ORDER BY timestamp DESC, id DESC LIMIT 1"""
-                    )
-                    week_row = cursor.fetchone()
-                    days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-                    week = (
-                        {day: bool(week_row[day]) for day in days}
-                        if week_row
-                        else {day: False for day in days}
-                    )
-        return week
+            conn.row_factory = sqlite3.Row
+
+            row = conn.execute("""
+                SELECT * FROM week_status
+                WHERE patient_id IS NOT NULL AND device_name IS NULL
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+            """).fetchone()
+
+        if not row:
+            return {day: False for day in self.DAYS}
+
+        return {day: bool(row[day]) for day in self.DAYS}
 
     def reset_week_status_person(self):
-        """resetta gli status della persona"""
+        """Azzera lo stato settimanale della persona."""
+
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            conn.execute("""
                 UPDATE week_status
                 SET timestamp = ?,
-                    monday = 0,
-                    tuesday = 0,
-                    wednesday = 0,
-                    thursday = 0,
-                    friday = 0,
-                    saturday = 0,
-                    sunday = 0
-                WHERE patient_id IS NOT NULL
-                   OR device_name IN (
-                       SELECT device_name FROM devices WHERE patient_id IS NOT NULL
-                   )
-            ''', (datetime.now().isoformat(),))
-            conn.commit()
-            print("[DB] Reset status persona.")
+                    monday = 0, tuesday = 0, wednesday = 0,
+                    thursday = 0, friday = 0, saturday = 0, sunday = 0
+                WHERE patient_id IS NOT NULL AND device_name IS NULL
+            """, (datetime.now().astimezone().isoformat(),))
+
+        db_log.info("Stato settimanale della persona azzerato")
 
     def reset_week_status_devices(self):
-        """resetta gli status delle schede"""
+        """Azzera gli stati settimanali dei dispositivi."""
+
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            conn.execute("""
                 UPDATE week_status
                 SET timestamp = ?,
-                    monday = 0,
-                    tuesday = 0,
-                    wednesday = 0,
-                    thursday = 0,
-                    friday = 0,
-                    saturday = 0,
-                    sunday = 0
-                WHERE device_name IN (
-                    SELECT device_name FROM devices WHERE patient_id IS NOT NULL
-                )
-            ''', (datetime.now().isoformat(),))
-            conn.commit()
-            print("[DB] Reset status schede.")
+                    monday = 0, tuesday = 0, wednesday = 0,
+                    thursday = 0, friday = 0, saturday = 0, sunday = 0
+                WHERE device_name IS NOT NULL AND patient_id IS NULL
+            """, (datetime.now().astimezone().isoformat(),))
+
+        db_log.info("Stati settimanali dei dispositivi azzerati")
 
     def update_scheduler_config(self, enabled, new_time):
-        """Aggiorna l'orario del check'"""
+        """Salva la configurazione dello scheduler."""
 
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute('''
+            cursor = conn.execute("""
                 UPDATE schedules
                 SET enabled = ?, intake_time = ?
-                WHERE patient_id IS NOT NULL
-            ''', (
-            enabled, new_time))
-            if cursor.rowcount == 0:  # caso in cui la riga non esiste
-                cursor.execute('''
-                    INSERT INTO schedules (
-                        patient_id, enabled, intake_time
-                    )
+                WHERE patient_id = ?
+            """, (int(bool(enabled)), new_time, self.static_id_patient))
+
+            if cursor.rowcount == 0:
+                conn.execute("""
+                    INSERT INTO schedules (patient_id, enabled, intake_time)
                     VALUES (?, ?, ?)
-                ''', (
-                    self.static_id_patient, enabled, new_time
-                ))
-            conn.commit()
-            print(f"[DB] Scheduler aggiornato: attivo alle {new_time}")
+                """, (self.static_id_patient, int(bool(enabled)), new_time))
+
+        db_log.info(
+            "Configurazione scheduler salvata: enabled=%s, time=%s",
+            enabled, new_time
+        )
 
     def update_user_location(self, lat, lng):
-        """Aggiorna la posizione dell'utente"""
+        """Aggiorna la posizione del paziente."""
+
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = conn.execute("""
                 UPDATE patients
                 SET lat = ?, lng = ?
-                WHERE id IS NOT NULL
-            ''', (lat, lng))
-            conn.commit()
-            print(f"[DB] Posizione utente aggiornata: lat={lat}, lng={lng}")
+                WHERE id = ?
+            """, (lat, lng, self.static_id_patient))
+
+        if cursor.rowcount == 0:
+            db_log.warning(
+                "Posizione non salvata: paziente %s non presente",
+                self.static_id_patient
+            )
+        else:
+            db_log.info("Posizione del paziente aggiornata")
 
     def delete_device(self, device_name):
-        """Elimina un dispositivo dal database"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM devices WHERE device_name = ?', (device_name,))
-            cursor.execute('DELETE FROM week_status WHERE device_name = ?', (device_name,))
-            conn.commit()
-            print(f"[DB] Dispositivo {device_name} eliminato dal database.")
+        """Elimina lo stato e il dispositivo."""
 
-    def delete_tables(self):
-        """Elimino tutte le tabelle del database"""
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DROP TABLE IF EXISTS week_status')
-            cursor.execute('DROP TABLE IF EXISTS devices')
-            cursor.execute('DROP TABLE IF EXISTS patients')
-            cursor.execute('DROP TABLE IF EXISTS schedules')
-            conn.commit()
-            print("[DB] Tutte le tabelle sono state eliminate.")
+            conn.execute(
+                "DELETE FROM week_status WHERE device_name = ?",
+                (device_name,)
+            )
+            conn.execute(
+                "DELETE FROM devices WHERE device_name = ?",
+                (device_name,)
+            )
+
+        db_log.info("Dispositivo eliminato: %s", device_name)
+
+
+# ============================================================
+# COMANDI MQTT
+# ============================================================
 
 class PillCommands:
-    # Comandi verso le schede
+
     DAILY_CHECK = "REQ"
     REQ_STATUS = "REQ_STATUS"
     REFILL = "REF"
@@ -356,473 +396,709 @@ class PillCommands:
     ALARM_OFF = "ALM_OFF"
     SYNC = "SYNC_REQ"
 
-    class FEEDS :
+    DAYS = (
+        "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday"
+    )
+
+    class FEEDS:
         COMMANDS = "pill-commands"
         BUZZER = "buzzer-commands"
         STATUS = "digital-twin-status"
         MESSAGES = "digital-twin-core"
-    
-    # Metodo per ottenere la stringa formattata
-    @staticmethod
-    def get(command_name):
-        return getattr(PillCommands, command_name.upper(), "UNKNOWN")
-    
-    @staticmethod
-    def get_command_by_day(day):
-        day = day.lower()
-        if day == "monday":
-            return PillCommands.MONDAY_CHECK
-        elif day == "tuesday":
-            return PillCommands.TUESDAY_CHECK
-        elif day == "wednesday":
-            return PillCommands.WEDNESDAY_CHECK
-        elif day == "thursday":
-            return PillCommands.THURSDAY_CHECK
-        elif day == "friday":
-            return PillCommands.FRIDAY_CHECK
-        elif day == "saturday":
-            return PillCommands.SATURDAY_CHECK
-        elif day == "sunday":
-            return PillCommands.SUNDAY_CHECK
-        else:
-            return "UNKNOWN"
-        
+
     @staticmethod
     def get_day_code(day):
-        day = day.lower()
-        if day == "monday":
-            return 0
-        elif day == "tuesday":
-            return 1
-        elif day == "wednesday":
-            return 2
-        elif day == "thursday":
-            return 3
-        elif day == "friday":
-            return 4
-        elif day == "saturday":
-            return 5
-        elif day == "sunday":
-            return 6
-        else:
+        try:
+            return PillCommands.DAYS.index(day.lower())
+        except (ValueError, AttributeError):
             return -1
-        
-    @staticmethod
-    def get_day(day):
-        if day == 0:
-            return "monday"
-        elif day == 1:
-            return "tuesday"
-        elif day == 2:
-            return "wednesday"
-        elif day == 3:
-            return "thursday"
-        elif day == 4:
-            return "friday"
-        elif day == 5:
-            return "saturday"
-        elif day == 6:
-            return "sunday"
-        else:
-            return "monday"
 
+    @staticmethod
+    def get_day(code):
+        if 0 <= code < 7:
+            return PillCommands.DAYS[code]
+        return "monday"
+
+
+# ============================================================
+# DIGITAL TWIN
+# ============================================================
 
 class PillBoxDigitalTwin:
-    def __init__(self, username, key, broker="io.adafruit.com", port=1883):
+
+    DAYS = PillCommands.DAYS
+
+    def __init__(
+        self, username, key,
+        broker="io.adafruit.com", port=1883
+    ):
+        if not username or not key:
+            raise ValueError(
+                "Impostare ADA_USERNAME e ADA_KEY nelle variabili d'ambiente"
+            )
+
         self.username = username
         self.key = key
         self.broker = broker
         self.port = port
 
         self.devices = {}
-        self.scheduler_enabled = True  # Controllabile da app
-        self.user_lat = None  # Posizione utente (aggiornata dall'app)
+        self.week = {day: False for day in self.DAYS}
+
+        self.scheduler_enabled = True
+        self.hour_check = "11:10"
+        self.user_lat = None
         self.user_lng = None
-        
-        self.week = {
-            "monday" : False,
-            "tuesday" : False,
-            "wednesday" : False,
-            "thursday" : False,
-            "friday" : False,
-            "saturday" : False,
-            "sunday" : False,
-
-        }
-
-        # Stato interno del Twin
-        self.state = {
-            "last_update": None,
-        }
-
-        self.client = mqtt.Client()
-        self.client.username_pw_set(self.username, self.key)
-        
-        # Assegnazione dei metodi di callback
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
 
         self.db = DatabaseManager()
-
         self.week = self.db.load_global_state()
         self.devices = self.db.load_devices_state()
 
-        self.check_disconnection()
-        
+        self.client = mqtt.Client()
+        self.client.username_pw_set(username, key)
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+        self.client.on_disconnect = self.on_disconnect
 
-        #print(f"[*] Stato globale caricato: {self.week}")
-        #print(f"[*] Stato dispositivi caricato: {self.devices}")
+        self.check_disconnection()
+
+        log.info(
+            "Digital Twin inizializzato: broker=%s, port=%s",
+            self.broker, self.port
+        )
+
+    # --------------------------------------------------------
+    # MQTT
+    # --------------------------------------------------------
 
     def on_connect(self, client, userdata, flags, rc):
-        """Gestisce l'apertura della connessione e si iscrive ai feeds"""
         if rc == 0:
-            print(f"[*] Connesso al Broker Adafruit come: {self.username}")
-            # Iscrizione ai feed (Topic)
-            client.subscribe(f"{self.username}/feeds/digital-twin-core")
-            client.subscribe(f"{self.username}/feeds/pill-commands")
+            mqtt_log.info("Connesso al broker %s", self.broker)
+
+            client.subscribe(
+                f"{self.username}/feeds/{PillCommands.FEEDS.MESSAGES}"
+            )
+            client.subscribe(
+                f"{self.username}/feeds/{PillCommands.FEEDS.COMMANDS}"
+            )
+
             self.publish_state()
         else:
-            print(f"[!] Errore di connessione, codice: {rc}")
+            mqtt_log.error("Connessione MQTT fallita: rc=%s", rc)
+
+    def on_disconnect(self, client, userdata, rc):
+        if rc == 0:
+            mqtt_log.info("Disconnessione MQTT richiesta")
+        else:
+            mqtt_log.warning(
+                "Connessione MQTT interrotta: rc=%s", rc
+            )
 
     def on_message(self, client, userdata, msg):
-        """Gestisce i messaggi in entrata"""
         try:
-            payload = json.loads(msg.payload.decode())
-            topic = msg.topic
-            print(f"[<-] Ricevuto su {topic}: {payload}")
+            payload = json.loads(msg.payload.decode("utf-8"))
+            action = payload.get("action")
 
-            if "action" in payload and payload["action"] == PillCommands.DAILY_CHECK:
-                device = payload.get("device")
-                timestamp = payload.get("timestamp")
-                dt_obj = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                day = dt_obj.strftime("%A").lower()
-                if payload.get("val") == "taken" and self.week[day] != True:
-                    self.week[day] = True
-                    if device in self.devices:
-                        self.devices[device]["week"][day] = True
-                        self.devices[device]["last_seen"] = timestamp
-                    print(f"[#] Pillola del {day} PRESA da {device}. Stato settimana: {self.week}")
-                    self.send_command(target_device="all", command_type=PillCommands.ALARM_OFF, value="OFF", feed=PillCommands.FEEDS.BUZZER)
-                elif payload.get("val") == "taken":
-                    self.week[day] = True
-                    if device in self.devices:
-                        self.devices[device]["week"][day] = True
-                        self.devices[device]["last_seen"] = timestamp
-                self.db.insert_or_update_status_device(device_name=device, timestamp=timestamp, week=self.devices[device]["week"])
-                self.db.insert_or_update_status_person(timestamp=timestamp, week=self.week)
-                self.publish_state()
+            mqtt_log.info(
+                "Messaggio ricevuto: topic=%s action=%s",
+                msg.topic, action
+            )
+            mqtt_log.debug("Payload: %s", payload)
 
-            if "action" in payload and payload["action"] == PillCommands.REQ_STATUS:
-                status = payload.get("status")
-                device = payload.get("device")
-                time = payload.get("timestamp")
-                self.devices[device]["last seen"] = time
-                self.update_twin_state(status=status, device=device)
-                self.db.insert_or_update_status_device(device_name=device, timestamp=time, week=self.devices[device]["week"])
-                self.db.insert_or_update_status_person(timestamp=time, week=self.week)
-                self.publish_state()
+            if action == PillCommands.DAILY_CHECK:
+                self.handle_daily_check(payload)
 
-            if "action" in payload and payload["action"] == "connection":
-                payload = json.loads(msg.payload.decode())
-                device_name = payload.get("device")
-                time = payload.get("timestamp")
-                lat = None
-                lng = None
-                if lat in payload:
-                    lat = payload.get("lat")
-                    lng = payload.get("lng")
+            elif action == PillCommands.REQ_STATUS:
+                self.handle_device_status(payload)
 
-                if device_name not in self.devices:
-                    self.devices[device_name] = {
-                        "name": payload.get("name", f"{device_name}"),
-                        "status": "connected",
-                        "last_seen": time,
-                        "lat": lat,
-                        "lng":lng,
-                        "week": {day: False for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]}
-                    }
-                    print(f"[*] Registrato nuovo dispositivo: {device_name}")
-                    self.db.register_or_update_device(name=payload.get("name"), lat=lat, lng=lng, status="connected", last_seen=time)
-                else:
-                    self.devices[device_name]["status"] = "connected"
-                    self.devices[device_name]["last_seen"] = time
-                    self.db.register_or_update_device(name=payload.get("name"), lat=lat, lng=lng, status="connected", last_seen=time)
-                self.publish_state()
+            elif action == "connection":
+                self.handle_connection(payload)
 
-            if "action" in payload and payload["action"] == "scheduler_config":
-                enabled = payload.get("enabled", True)
-                new_time = payload.get("time", self.hour_check)
-                sender = payload.get("sender", "unknown")
-                print(f"[*] Ricevuta configurazione scheduler da {sender}: enabled={enabled}, time={new_time}")
-                self.update_scheduler(enabled=enabled, new_time=new_time)
-                self.db.update_scheduler_config(enabled=enabled, new_time=new_time)
+            elif action == "scheduler_config":
+                self.handle_scheduler_config(payload)
 
-            if "action" in payload and payload["action"] == "location_update":
-                self.user_lat = payload.get("lat")
-                self.user_lng = payload.get("lng")
-                print(f"[*] Posizione utente aggiornata: lat={self.user_lat}, lng={self.user_lng}")
-                self.db.update_user_location(self.user_lat, self.user_lng)
+            elif action == "location_update":
+                self.handle_location_update(payload)
 
-            #metodo solo di debug per guardare il db
-            if "action" in payload and payload["action"] == "print_db_debug":
-                print("[DB] Stato globale:", self.db.load_global_state())
-                print("[DB] Stato dispositivi:", self.db.load_devices_state())
-                
-        except Exception as e:
-            print(f"[!] Errore nel parsing del messaggio: {e}")
+            elif action == "print_db_debug":
+                log.info("Stato globale DB: %s", self.db.load_global_state())
+                log.info(
+                    "Stato dispositivi DB: %s",
+                    self.db.load_devices_state()
+                )
 
-    def update_twin_state(self, status, device):
-        """Metodo per cambiare lo stato del singolo device"""
-        
-        for i in range(7):
-            if(status[i] == "0"):
-                self.devices[device]["week"][PillCommands.get_day(i)] = True
-            else: 
-                self.devices[device]["week"][PillCommands.get_day(i)] = False
-        
-        #print(f"[#] Stato Twin aggiornato: {self.week}")
-        
-        # Notifica il nuovo stato a tutti i dispositivi (Broadcast)
+            else:
+                mqtt_log.debug("Azione non gestita: %s", action)
+
+        except (ValueError, TypeError, KeyError, IndexError):
+            mqtt_log.exception(
+                "Messaggio MQTT non valido (topic=%s)", msg.topic
+            )
+        except Exception:
+            mqtt_log.exception(
+                "Errore durante la gestione del messaggio (topic=%s)",
+                msg.topic
+            )
+
+    def handle_daily_check(self, payload):
+        device = payload.get("device")
+        timestamp = payload.get("timestamp")
+        value = payload.get("val")
+
+        if not timestamp:
+            mqtt_log.warning("Timestamp mancante nella risposta DAILY_CHECK")
+            return
+
+        try:
+            dt = datetime.fromisoformat(
+                timestamp.replace("Z", "+00:00")
+            )
+        except ValueError:
+            mqtt_log.warning("Timestamp non valido: %s", timestamp)
+            return
+
+        day = self.DAYS[dt.weekday()]
+
+        if value != "taken":
+            mqtt_log.info(
+                "Pillola non confermata: device=%s giorno=%s",
+                device, day
+            )
+            return
+
+        self.week[day] = True
+
+        if device in self.devices:
+            self.devices[device]["week"][day] = True
+            self.devices[device]["last_seen"] = timestamp
+
+            self.db.insert_or_update_status_device(
+                device, timestamp, self.devices[device]["week"]
+            )
+
+        self.db.insert_or_update_status_person(timestamp, self.week)
+
+        mqtt_log.info(
+            "Pillola confermata: device=%s giorno=%s",
+            device, day
+        )
+
+        self.send_command(
+            "all", PillCommands.ALARM_OFF, "OFF",
+            PillCommands.FEEDS.BUZZER
+        )
+
         self.publish_state()
 
-    def find_nearest_device(self):
-        """
-        Restituisce il "name" del portapillole più vicino alla posizione dell'utente.
-        Se la posizione dell'utente o dei dispositivi non è disponibile, restituisce "all"(broadcast).
-        """
-        if self.user_lat is None or self.user_lng is None:
-            print("[~] Posizione utente non disponibile: allarme a tutti i dispositivi.")
-            return "all"
+    def handle_device_status(self, payload):
+        device = payload.get("device")
+        status = payload.get("status")
+        timestamp = payload.get("timestamp")
 
-        best_device = None
-        best_dist = float("inf")
+        if device not in self.devices:
+            mqtt_log.warning(
+                "Stato ricevuto da dispositivo sconosciuto: %s", device
+            )
+            return
 
-        for device_id, d in self.devices.items():
-            lat = d.get("lat")
-            lng = d.get("lng")
-            if lat is None or lng is None:
-                continue
-            dist = ((lat - self.user_lat) ** 2 + (lng - self.user_lng) ** 2) ** 0.5 #distanza euclidea
-            if dist < best_dist:
-                best_dist = dist
-                best_device = device_id
+        if not isinstance(status, str) or len(status) < 7:
+            mqtt_log.warning("Stato settimanale non valido: %s", status)
+            return
 
-        if best_device is None:
-            print("[~] Nessun dispositivo con posizione nota: allarme a tutti.")
-            return "all"
+        if not timestamp:
+            timestamp = datetime.now().astimezone().isoformat()
 
-        print(f"[~] Dispositivo più vicino all'utente: {best_device} (distanza ~{best_dist:.5f}°)")
-        return best_device
+        for i, day in enumerate(self.DAYS):
+            self.devices[device]["week"][day] = status[i] == "0"
+
+        self.devices[device]["last_seen"] = timestamp
+
+        self.db.insert_or_update_status_device(
+            device, timestamp, self.devices[device]["week"]
+        )
+        self.db.insert_or_update_status_person(timestamp, self.week)
+
+        mqtt_log.info("Stato aggiornato per dispositivo %s", device)
+        self.publish_state()
+
+    def handle_connection(self, payload):
+        device = payload.get("device")
+        timestamp = payload.get("timestamp")
+        lat = payload.get("lat")
+        lng = payload.get("lng")
+
+        if not device:
+            mqtt_log.warning("Messaggio connection senza device")
+            return
+
+        if device not in self.devices:
+            self.devices[device] = {
+                "name": payload.get("name", device),
+                "status": "connected",
+                "last_seen": timestamp,
+                "lat": lat,
+                "lng": lng,
+                "week": {day: False for day in self.DAYS}
+            }
+            mqtt_log.info("Nuovo dispositivo rilevato: %s", device)
+        else:
+            current = self.devices[device]
+            current["status"] = "connected"
+            current["last_seen"] = timestamp
+
+            if lat is not None:
+                current["lat"] = lat
+            if lng is not None:
+                current["lng"] = lng
+
+        # Si usa l'identificativo del dispositivo come chiave DB.
+        self.db.register_or_update_device(
+            name=device,
+            lat=lat,
+            lng=lng,
+            status="connected",
+            last_seen=timestamp
+        )
+
+        self.publish_state()
+
+    def handle_scheduler_config(self, payload):
+        enabled = payload.get("enabled", True)
+        new_time = payload.get("time", self.hour_check)
+
+        if not isinstance(enabled, bool):
+            mqtt_log.warning("Valore enabled non valido: %r", enabled)
+            return
+
+        try:
+            time.strptime(new_time, "%H:%M")
+        except (ValueError, TypeError):
+            mqtt_log.warning("Orario scheduler non valido: %r", new_time)
+            return
+
+        self.update_scheduler(enabled, new_time)
+        self.db.update_scheduler_config(enabled, new_time)
+
+        sched_log.info(
+            "Configurazione ricevuta: enabled=%s time=%s sender=%s",
+            enabled, new_time, payload.get("sender", "unknown")
+        )
+
+    def handle_location_update(self, payload):
+        try:
+            lat = float(payload["lat"])
+            lng = float(payload["lng"])
+
+            if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                raise ValueError("Coordinate fuori intervallo")
+
+        except (KeyError, TypeError, ValueError):
+            log.warning("Coordinate utente mancanti o non valide")
+            return
+
+        self.user_lat = lat
+        self.user_lng = lng
+
+        self.db.update_user_location(lat, lng)
+        log.info("Posizione utente aggiornata")
+
+    # --------------------------------------------------------
+    # STATO E COMANDI
+    # --------------------------------------------------------
 
     def publish_state(self):
-        """Invia lo stato attuale sul feed (payload completo con week + devices)"""
-        topic = f"{self.username}/feeds/"+PillCommands.FEEDS.STATUS
+        topic = (
+            f"{self.username}/feeds/{PillCommands.FEEDS.STATUS}"
+        )
 
         devices_payload = {
             name: {
-                "name": d.get("name", name),
-                "status": d.get("status", "unknown"),
-                "last_seen": d.get("last_seen"),
-                "lat":d.get("lat"),
-                "lng":d.get("lng"),
-                "week": d.get("week", {})
+                "name": device.get("name", name),
+                "status": device.get("status", "unknown"),
+                "last_seen": device.get("last_seen"),
+                "lat": device.get("lat"),
+                "lng": device.get("lng"),
+                "week": device.get("week", {})
             }
-            for name, d in self.devices.items()
+            for name, device in self.devices.items()
         }
 
         payload = {
-            **self.week,                    # monday, tuesday, ... (stato globale utente)
-            "_devices": devices_payload     # stato per-dispositivo
+            **self.week,
+            "_devices": devices_payload
         }
 
-        self.client.publish(topic, json.dumps(payload), retain=True)
-        print(f"[->] Stato pubblicato su {topic}")
+        try:
+            result = self.client.publish(
+                topic, json.dumps(payload), retain=True
+            )
+
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                mqtt_log.error(
+                    "Pubblicazione stato fallita: rc=%s", result.rc
+                )
+            else:
+                mqtt_log.info("Stato pubblicato su %s", topic)
+
+        except Exception:
+            mqtt_log.exception("Errore durante la pubblicazione dello stato")
 
     def send_command(self, target_device, command_type, value, feed):
-        """Metodo per inviare messaggi ai vari dispositivi"""    
         payload = {
             "target": target_device,
             "command": command_type,
             "val": value,
             "sender": "digital_twin_engine",
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            "timestamp": datetime.now().astimezone().isoformat()
         }
 
-        topic = f"{self.username}/feeds/"+feed
+        topic = f"{self.username}/feeds/{feed}"
 
-        self.client.publish(topic, json.dumps(payload))
-        print(f"[->] Comando inviato a {target_device}: {command_type} -> {value}")
+        try:
+            result = self.client.publish(topic, json.dumps(payload))
+
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                mqtt_log.error(
+                    "Invio comando fallito: target=%s command=%s rc=%s",
+                    target_device, command_type, result.rc
+                )
+            else:
+                mqtt_log.info(
+                    "Comando inviato: target=%s command=%s value=%s",
+                    target_device, command_type, value
+                )
+
+        except Exception:
+            mqtt_log.exception(
+                "Errore nell'invio del comando %s", command_type
+            )
+
+    def update_twin_state(self, status, device):
+        if device not in self.devices:
+            mqtt_log.warning("Dispositivo sconosciuto: %s", device)
+            return
+
+        if not isinstance(status, str) or len(status) < 7:
+            mqtt_log.warning("Stato non valido per %s", device)
+            return
+
+        for i, day in enumerate(self.DAYS):
+            self.devices[device]["week"][day] = status[i] == "0"
+
+        self.publish_state()
+
+    def find_nearest_device(self):
+        if self.user_lat is None or self.user_lng is None:
+            log.warning("Posizione utente sconosciuta: broadcast allarme")
+            return "all"
+
+        best_device = None
+        best_distance = float("inf")
+
+        for device_id, device in self.devices.items():
+            lat = device.get("lat")
+            lng = device.get("lng")
+
+            if lat is None or lng is None:
+                continue
+
+            try:
+                lat = float(lat)
+                lng = float(lng)
+            except (TypeError, ValueError):
+                continue
+
+            distance = (
+                (lat - self.user_lat) ** 2 +
+                (lng - self.user_lng) ** 2
+            ) ** 0.5
+
+            if distance < best_distance:
+                best_distance = distance
+                best_device = device_id
+
+        if best_device is None:
+            log.warning("Nessun dispositivo con coordinate disponibili")
+            return "all"
+
+        log.info(
+            "Dispositivo più vicino: %s (distanza approssimata %.5f°)",
+            best_device, best_distance
+        )
+        return best_device
+
+    # --------------------------------------------------------
+    # SCHEDULER
+    # --------------------------------------------------------
 
     def update_scheduler(self, enabled, new_time):
-        """Aggiorna orario e stato dello scheduler ricevuto dall'app mobile"""
         self.scheduler_enabled = enabled
+
+        schedule.clear("daily_check")
+
         if enabled:
-            # Cancella il vecchio scheduler e ripianifica con il nuovo orario
-            schedule.clear('daily_check')
             self.hour_check = new_time
-            schedule.every().day.at(self.hour_check).do(self.trigger_global_check).tag('daily_check')
-            print(f"[*] Scheduler aggiornato: attivo alle {self.hour_check}")
+            schedule.every().day.at(
+                self.hour_check
+            ).do(self.trigger_global_check).tag("daily_check")
+
+            sched_log.info("Check giornaliero pianificato alle %s", new_time)
         else:
-            schedule.clear('daily_check')
-            print(f"[*] Scheduler disattivato dall'app mobile")
+            sched_log.info("Scheduler giornaliero disattivato")
 
-    def run_scheduler_loop(self): 
-        """Il loop dello scheduler eseguito nel thread"""
-        # Cambia l'orario qui per i tuoi test
-        self.hour_check = "11:10:00"
-        schedule.every().day.at(self.hour_check).do(self.trigger_global_check).tag('daily_check')
-        # Scheduler del refill
-        schedule.every().sunday.at("21:00").do(self.trigger_global_refill)
-        # Scheduler del reset dello status del DigitalTwin
-        schedule.every().sunday.at("00:00").do(self.trigger_reset)
-        schedule.every().day.at("11:21").do(self.trigger_global_refill)
-        schedule.every().day.at("00:00").do(self.check_disconnection)
+    def run_scheduler_loop(self):
+        schedule.every().day.at(
+            self.hour_check
+        ).do(self.trigger_global_check).tag("daily_check")
 
+        schedule.every().sunday.at("21:00").do(
+            self.trigger_global_refill
+        ).tag("refill")
+
+        schedule.every().sunday.at("00:00").do(
+            self.trigger_reset
+        ).tag("weekly_reset")
+
+        schedule.every().day.at("11:21").do(
+            self.trigger_global_refill
+        ).tag("daily_refill")
+
+        schedule.every().day.at("00:00").do(
+            self.check_disconnection
+        ).tag("disconnection")
+
+        sched_log.info("Scheduler avviato")
 
         while True:
-            schedule.run_pending()  #controllo i vari schedule
-            time.sleep(1)           #faccio controllare ogni schedule ogni secondo
+            try:
+                schedule.run_pending()
+            except Exception:
+                sched_log.exception("Errore durante l'esecuzione scheduler")
+
+            time.sleep(1)
 
     def trigger_global_check(self):
-        """Metodo per cìfar partire il controllo della pillola giornaliera
-           su tutte le schede"""
         if not self.scheduler_enabled:
-            print("[*] Scheduler disabilitato, check saltato.")
-            return
-        print("[!] Avvio primo controllo globale...")
-        self.day_of_week = time.strftime("%A").lower()
-        day_code = PillCommands.get_day_code(self.day_of_week)
-
-        if self.week[self.day_of_week]:
-            print(f"[OK] Pillola di {self.day_of_week} già risultante come PRESA. Salto il check.")
+            sched_log.info("Check saltato: scheduler disabilitato")
             return
 
-        print(f"[!] Avvio controllo per: {self.day_of_week}")
-        day_code = PillCommands.get_day_code(self.day_of_week)
-        self.send_command(target_device="all", command_type=PillCommands.DAILY_CHECK, value=day_code, feed=PillCommands.FEEDS.COMMANDS)
+        day = self.DAYS[datetime.now().weekday()]
 
-        # Dopo 600 secondi (10 min), esegui il secondo controllo (Last Chance)
-        threading.Timer(10, self.last_chance_check).start()
+        if self.week[day]:
+            sched_log.info("Pillola già presa per %s", day)
+            return
+
+        sched_log.info("Avvio controllo giornaliero per %s", day)
+
+        self.send_command(
+            "all", PillCommands.DAILY_CHECK,
+            PillCommands.get_day_code(day),
+            PillCommands.FEEDS.COMMANDS
+        )
+
+        threading.Timer(600, self.last_chance_check).start()
 
     def last_chance_check(self):
-        """Secondo tentativo prima dell'allarme"""
-        day_code = PillCommands.get_day_code(self.day_of_week)
+        day = self.DAYS[datetime.now().weekday()]
 
-        # Se nel frattempo la pillola è stata presa (tramite risposte precedenti), fermati
-        if self.week[self.day_of_week]:
-            print("[OK] Pillola rilevata prima del secondo controllo. Nessuna azione necessaria.")
+        if self.week[day]:
+            sched_log.info("Pillola confermata: secondo check annullato")
             return
-        print("[?] Pillola non ancora presa. Invio secondo controllo di verifica...")
-        
-        # Interroga di nuovo le schede
-        self.send_command(target_device="all", command_type=PillCommands.DAILY_CHECK, value=day_code, feed=PillCommands.FEEDS.COMMANDS)
 
-        # Aspetta altri 100 secondi, poi verifica definitivamente per l'allarme
-        threading.Timer(10, self.final_alarm_verification).start()
+        sched_log.warning("Pillola non confermata: secondo controllo")
+
+        self.send_command(
+            "all", PillCommands.DAILY_CHECK,
+            PillCommands.get_day_code(day),
+            PillCommands.FEEDS.COMMANDS
+        )
+
+        threading.Timer(100, self.final_alarm_verification).start()
 
     def final_alarm_verification(self):
-        """Verifica finale: se ancora False, l'allarme suona davvero"""
-        if not self.week[self.day_of_week]:
-            print("[!!!] ATTENZIONE: Controllo fallito anche al secondo tentativo. Invio allarmi.")
+        day = self.DAYS[datetime.now().weekday()]
+
+        if not self.week[day]:
+            sched_log.error("Pillola non confermata: attivazione allarme")
+
             target = self.find_nearest_device()
-            self.send_command(target_device=target, command_type=PillCommands.ALARM_ON, value="ON", feed=PillCommands.FEEDS.BUZZER)
-            #interrompo gli allarmi dopo 10 secondi per semplicità
-            threading.Timer(10,self.send_command,args=("all", PillCommands.ALARM_OFF, "OFF", PillCommands.FEEDS.BUZZER)).start()
+
+            self.send_command(
+                target, PillCommands.ALARM_ON, "ON",
+                PillCommands.FEEDS.BUZZER
+            )
+
+            threading.Timer(
+                10,
+                self.send_command,
+                args=(
+                    "all", PillCommands.ALARM_OFF, "OFF",
+                    PillCommands.FEEDS.BUZZER
+                )
+            ).start()
         else:
-            print("[OK] Pillola rilevata al secondo controllo. Allarme annullato.")
+            sched_log.info("Allarme annullato: pillola confermata")
 
     def trigger_global_refill(self):
-        print("[!] Invio comando di refill globale...")
-        self.day_of_week = time.strftime("%A").lower()
-        day_code = PillCommands.get_day_code(self.day_of_week)
-        
+        sched_log.info("Avvio controllo refill")
 
-        # Invia il primo comando REF
-        self.send_command(target_device="all", command_type=PillCommands.REQ_STATUS, value=day_code, feed=PillCommands.FEEDS.COMMANDS)
+        day = self.DAYS[datetime.now().weekday()]
 
-        # Dopo 600 secondi (10 min), esegui il secondo controllo (Last Chance)
+        self.send_command(
+            "all", PillCommands.REQ_STATUS,
+            PillCommands.get_day_code(day),
+            PillCommands.FEEDS.COMMANDS
+        )
+
         threading.Timer(100, self.refill_verification).start()
 
     def refill_verification(self):
-        for d in self.devices.values():
-            full = all(status == False for status in d["week"].values())
+        for device_id, device in self.devices.items():
+            week = device.get("week", {})
+            full = all(status is False for status in week.values())
 
             if not full:
-                giorni_vuoti = [day for day, s in d["week"].items() if s == True]
-                print(f"[!!!] Errore Refill: i vani di {giorni_vuoti} risultano ancora vuoti nella scheda {d["name"]}!")
-                self.send_command(target_device=d["name"], command_type=PillCommands.ALARM_ON, value="ON", feed=PillCommands.FEEDS.BUZZER)
-                #interrompo gli allarmi dopo 10 secondi per semplicità
-                threading.Timer(10,self.send_command,args=("all", PillCommands.ALARM_OFF, "OFF", PillCommands.FEEDS.BUZZER)).start()
+                empty_days = [
+                    day for day, status in week.items()
+                    if status is True
+                ]
+
+                sched_log.error(
+                    "Refill incompleto: device=%s giorni=%s",
+                    device_id, empty_days
+                )
+
+                self.send_command(
+                    device_id, PillCommands.ALARM_ON, "ON",
+                    PillCommands.FEEDS.BUZZER
+                )
+
+                threading.Timer(
+                    10,
+                    self.send_command,
+                    args=(
+                        "all", PillCommands.ALARM_OFF, "OFF",
+                        PillCommands.FEEDS.BUZZER
+                    )
+                ).start()
             else:
-                print(f"[OK] Refill avvenuto con successo per la scheda {d["name"]}.")
+                sched_log.info("Refill verificato: device=%s", device_id)
 
     def trigger_reset(self):
-        """Resetto lo stato del digitalTwin"""
-        self.week = {day: False for day in self.week}
-        for d in self.devices:
-            d["week"] = {day: False for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]}
+        log.info("Avvio reset settimanale")
+
+        self.week = {day: False for day in self.DAYS}
+
+        for device in self.devices.values():
+            device["week"] = {day: False for day in self.DAYS}
+
+        timestamp = datetime.now().astimezone().isoformat()
+
         self.db.reset_week_status_person()
         self.db.reset_week_status_devices()
+
+        # Salva lo stato azzerato anche per i dispositivi in memoria.
+        for device_id, device in self.devices.items():
+            self.db.insert_or_update_status_device(
+                device_id, timestamp, device["week"]
+            )
+
+        self.db.insert_or_update_status_person(timestamp, self.week)
         self.publish_state()
 
+        log.info("Reset settimanale completato")
+
+    # --------------------------------------------------------
+    # CONTROLLO CONNESSIONI
+    # --------------------------------------------------------
+
     def check_disconnection(self):
-        """Controllo se le schede sono ancora connesse"""
-        cutoff_timestamp = time.time() - (3600 * 24 * 2)  # controllo sulle 48 ore
+        cutoff = time.time() - (48 * 60 * 60)
+
         for device_id, device in list(self.devices.items()):
-            last_seen = device.get("last_seen", device.get("last seen"))
+            last_seen = device.get("last_seen")
+
             if not last_seen:
                 continue
-            try:
-                last_seen_timestamp = (
-                    float(last_seen)
-                    if isinstance(last_seen, (int, float))
-                    else datetime.fromisoformat(last_seen.replace("Z", "+00:00")).timestamp()
-                )
-                if last_seen_timestamp < cutoff_timestamp:
-                    #print(f"[!] Dispositivo {device_id} non connesso da più di 48 ore. Aggiorno stato a 'disconnected'.")
-                    self.db.register_or_update_device(name=device.get("name", device_id), status="disconnected")
-                    del self.devices[device_id]
-                    #self.db.delete_device(device_id)
-            except (TypeError, ValueError, OSError):
-                continue
 
+            try:
+                if isinstance(last_seen, (int, float)):
+                    last_seen_timestamp = float(last_seen)
+                else:
+                    last_seen_timestamp = datetime.fromisoformat(
+                        last_seen.replace("Z", "+00:00")
+                    ).timestamp()
+
+                if last_seen_timestamp < cutoff:
+                    device["status"] = "disconnected"
+
+                    self.db.register_or_update_device(
+                        name=device_id,
+                        status="disconnected"
+                    )
+
+                    log.warning(
+                        "Dispositivo disconnesso da oltre 48 ore: %s",
+                        device_id
+                    )
+
+            except (TypeError, ValueError, OSError):
+                log.warning(
+                    "Timestamp last_seen non valido per %s: %r",
+                    device_id, last_seen
+                )
+
+        self.publish_state()
+
+    # --------------------------------------------------------
+    # AVVIO
+    # --------------------------------------------------------
 
     def start(self):
-        daemon_sched = threading.Thread(target=self.run_scheduler_loop, daemon=True)# Avvio lo scheduler in un thread dedicato
-        daemon_sched.start()
-        self.day_of_week = time.strftime("%A").lower()
-        print(f"[*] Thread Scheduler avviato. Ora sistema: {time.strftime('%H:%M:%S')}, Giorno: {self.day_of_week}")
+        scheduler_thread = threading.Thread(
+            target=self.run_scheduler_loop,
+            name="SchedulerThread",
+            daemon=True
+        )
+        scheduler_thread.start()
 
-        """Avvia il loop di comunicazione"""
-        self.client.connect(self.broker, self.port)
-        self.client.loop_forever()                  #gestisce automaticamente la connessione in caso di cadute, è bloccante fino alla disconessione
+        log.info(
+            "Avvio Digital Twin: ora=%s giorno=%s",
+            datetime.now().strftime("%H:%M:%S"),
+            self.DAYS[datetime.now().weekday()]
+        )
 
-
-        
-
-# def main():
-#     try:
-#         ADAFRUIT_USER = os.environ.get("ADA_USERNAME")
-#         ADAFRUIT_KEY = os.environ.get("ADA_KEY")
-#         sys.stdout = open("../twin.log", "a", buffering=1)  # line-buffered
-#         sys.stderr = open("../twin.err", "a", buffering=1)
-#         twin = PillBoxDigitalTwin(ADAFRUIT_USER, ADAFRUIT_KEY)
-#         twin.start()
-#     except KeyboardInterrupt:
-#         print("Arresto del digital twin...")
-
-# if __name__ == "__main__":
-#     main()
+        try:
+            self.client.connect(self.broker, self.port, keepalive=60)
+            self.client.loop_forever()
+        except Exception:
+            mqtt_log.exception("Errore fatale nel loop MQTT")
+            raise
+        finally:
+            self.client.disconnect()
+            log.info("Digital Twin arrestato")
 
 
-#--- MAIN VECCHIO ---
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+    try:
+        username = os.environ.get("ADA_USERNAME")
+        key = os.environ.get("ADA_KEY")
+
+        twin = PillBoxDigitalTwin(username, key)
+        twin.start()
+
+    except KeyboardInterrupt:
+        log.info("Arresto richiesto dall'utente")
+
+    except Exception:
+        log.exception("Errore fatale durante l'avvio del Digital Twin")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    # Inserisci qui le tue credenziali Adafruit
-    ADAFRUIT_USER = "321758"
-    ADAFRUIT_KEY = ""
-    twin = PillBoxDigitalTwin(ADAFRUIT_USER, ADAFRUIT_KEY)
-    twin.start()
-
-
-    
-    
+    main()
