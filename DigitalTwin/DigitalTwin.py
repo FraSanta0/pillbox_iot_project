@@ -99,15 +99,6 @@ class DatabaseManager:
         """Salva o aggiorna lo stato del dispositivo sul DB."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO devices (device_name, patient_id, status, last_seen, lat, lng)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(device_name) DO UPDATE SET
-                    status = COALESCE(excluded.status, devices.status),
-                    last_seen = COALESCE(excluded.last_seen, devices.last_seen), 
-                    lat = COALESCE(excluded.lat, devices.lat),
-                    lng = COALESCE(excluded.lng, devices.lng)
-            ''', (name, self.static_id_patient, status, last_seen, lat, lng))
 
             cursor.execute('''
                 UPDATE devices
