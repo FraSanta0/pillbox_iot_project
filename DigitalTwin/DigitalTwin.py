@@ -13,11 +13,12 @@ class DatabaseManager:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.db_name = db_name
         self.db_path = os.path.join(base_dir, db_name)
+        self.static_id_patient = 1
         
         #self.delete_tables() 
         self.init_db()
 
-        self.static_id_patient = 1
+        
 
     def get_connection(self):
         return sqlite3.connect(self.db_path)
@@ -84,7 +85,13 @@ class DatabaseManager:
                     FOREIGN KEY (patient_id) REFERENCES patients (id)
                 )
             ''')
-            
+
+            #5. Inserimento del paziente statico se non esiste
+            cursor.execute('''
+                INSERT OR IGNORE INTO patients (id, name, lat, lng, default_intake_time)
+                VALUES (?, ?, NULL, NULL, NULL)
+            ''', (self.static_id_patient, "default_patient"))
+
             conn.commit()
             print("[DB] Tabelle inizializzate")
 
@@ -101,6 +108,22 @@ class DatabaseManager:
                     lat = COALESCE(excluded.lat, devices.lat),
                     lng = COALESCE(excluded.lng, devices.lng)
             ''', (name, self.static_id_patient, status, last_seen, lat, lng))
+
+            cursor.execute('''
+                UPDATE devices
+                SET status = ?,
+                    last_seen = ?, lat = ?, lng = ?
+                WHERE device_name = ?
+            ''', (
+                status, last_seen, lat, lng, name
+                ))
+
+            if cursor.rowcount == 0:  # caso in cui la riga non esiste
+                cursor.execute('''
+                    INSERT INTO devices (device_name, patient_id, status, last_seen, lat, lng)
+                    VALUES (?, NULL, ?, ?, ?, ?)
+                ''', (name, self.static_id_patient, status, last_seen, lat, lng))
+
             conn.commit()
         """Con coalesce vado a recuperare il primo non nullo tra quelli passati, dando la priorità a quello nuovo"""
         """Excluded è una tabella temporanea creata se si genera un confinto al momento dell'insert"""
@@ -165,7 +188,7 @@ class DatabaseManager:
                     )
                     VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
-                    timestamp, 1,
+                    timestamp, self.static_id_patient,
                     week["monday"], week["tuesday"], week["wednesday"],
                     week["thursday"], week["friday"], week["saturday"], week["sunday"]
                 ))
@@ -796,12 +819,10 @@ class PillBoxDigitalTwin:
 if __name__ == "__main__":
     # Inserisci qui le tue credenziali Adafruit
     ADAFRUIT_USER = "321758"
-    ADAFRUIT_KEY = "aio_FPwq82dt3DfLKbJ9Ipohk6RxoKfF"
+    ADAFRUIT_KEY = ""
     twin = PillBoxDigitalTwin(ADAFRUIT_USER, ADAFRUIT_KEY)
     twin.start()
 
 
-    #a9EtJGrI53xh421Cl53
-    #questa non è la chiave
-    #aio_JYKg94N8z
+    
     
